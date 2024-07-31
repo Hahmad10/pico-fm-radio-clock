@@ -6,6 +6,20 @@ from PicoRadio_API import Radio  # Import the radio class
 from PicoAlarm_API import Alarm  # Import the alarm class
 import utime
 
+stations = {
+    88.9: "CBUX ICI Musique",
+    90.5: "CBCV CBC Radio One",
+    91.3: "CJZN The Zone",
+    92.1: "CBU CBC Music",
+    98.5: "CIOC Ocean",
+    99.7: "CBUF ICI Première",
+    100.3: "CKKQ The Q",
+    101.9: "CFUV",
+    103.1: "CHTT Jack",
+    107.3: "CHBE Virgin Radio",
+    107.9: "CILS Radio Victoria"
+}
+
 # Setup radio
 fm_radio = Radio(101.9, 4, True)  # Start muted
 
@@ -166,7 +180,7 @@ def handle_encoder():
             utime.sleep_ms(100)
 
 def handle_button(pin, delay):
-    global last_button_press_time, setting_minutes, clock_set, alarm_set, editing_time, editing_alarm, editing_snooze, setting_channel, setting_integer_part, snooze_duration
+    global last_button_press_time, setting_minutes, clock_set, alarm_set, editing_time, editing_alarm, editing_snooze, setting_channel, setting_integer_part, snooze_duration, show_alarm_confirmation, show_snooze_duration_confirmation, show_mute_confirmation, show_channel_set_confirmation
     current_time = utime.ticks_ms()
     if current_time - last_button_press_time > delay:  # Debounce the button
         last_button_press_time = current_time
@@ -180,9 +194,10 @@ def handle_button(pin, delay):
                 fm_radio.ProgramRadio()
                 setting_channel = False  # Exit channel setting mode
                 setting_integer_part = True  # Reset for future channel settings
-                show_message("Channel Set")  # Show confirmation message
-                utime.sleep(2)
-                clear_display()
+                show_channel_set_confirmation = True
+#                 show_message("Channel Set")  # Show confirmation message
+#                 utime.sleep(2)
+#                 clear_display()
         elif not clock_set:
             print("Setting Clock...")
             if setting_minutes:
@@ -194,26 +209,29 @@ def handle_button(pin, delay):
             if setting_minutes:
                 alarm.set_alarm(hour, minute)
                 alarm_set = True
-                show_message("Alarm Set")  # Show confirmation message
-                utime.sleep(2)
-                clear_display()
+                show_alarm_confirmation = True
+                #show_message("Alarm Set")  # Show confirmation message
+                #utime.sleep(1)
+                #clear_display()
             setting_minutes = not setting_minutes
         elif editing_snooze:
             print("Setting Snooze Duration...")
             alarm.set_snooze_duration(snooze_duration)  # Set the snooze duration in the alarm class
             editing_snooze = False  # Exit snooze duration editing mode
-            show_message("Snooze Duration Set")  # Show confirmation message
-            utime.sleep(2)
-            clear_display()
+            show_snooze_duration_confirmation = True
+#             show_message("Snooze Duration Set")  # Show confirmation message
+#             utime.sleep(1)
+#             clear_display()
         else:
             # Toggle mute
             print("Toggling Mute...")
             new_mute_state = not fm_radio.Mute
             if fm_radio.SetMute(int(new_mute_state)):
                 fm_radio.ProgramRadio()
-                show_message(f"{'Radio Muted' if new_mute_state else 'Radio Unmuted'}")  # Show confirmation message
-                utime.sleep(2)
-                clear_display()
+                show_mute_confirmation = True
+#                 show_message(f"{'Radio Muted' if new_mute_state else 'Radio Unmuted'}")  # Show confirmation message
+#                 utime.sleep(1)
+#                 clear_display()
                 print("Mute Toggled to:", new_mute_state)
         update_display(None)  # Update display immediately after handling button
         
@@ -259,9 +277,25 @@ def clear_display():
     utime.sleep_ms(100)  # Show the message for 2 seconds
     oled.fill(0)  # Clear the display again after showing the message
     update_display(None)  # Redraw the normal display content
-    
+
+
+def scroll_text(text, x, y, width, step=1):
+    """ Scrolls text from right to left if it exceeds the display width. """
+    text_width = 8 * len(text)
+    if text_width > width:
+        # Scroll the text
+        x = x - step
+        if x < -(text_width):
+            x = width
+    oled.text(text, x, y)
+    return x
+
+# Global variables for scrolling text
+scroll_position = SCREEN_WIDTH  # Start at the right edge of the screen
+
 # Function to be called by the timer
 def update_display(t):
+    global scroll_position, show_alarm_confirmation, show_snooze_duration_confirmation, show_mute_confirmation, show_channel_set_confirmation  
     oled.fill(0)  # Clear the display
 
     if not clock_set:
@@ -328,7 +362,27 @@ def update_display(t):
         x = (SCREEN_WIDTH - text_width) // 2
         y = (SCREEN_HEIGHT - 8) // 2
         oled.text(display_channel, x, y)
-
+        
+    elif show_alarm_confirmation:
+        show_message("Alarm Set")
+        utime.sleep_ms(1000)
+        show_alarm_confirmation = False
+        
+    elif show_channel_set_confirmation:
+        show_message("Channel Set")
+        utime.sleep_ms(1000)
+        show_channel_set_confirmation = False
+        
+    elif show_snooze_duration_confirmation:
+        show_message("Snooze Duration Set")  # Show confirmation message
+        utime.sleep_ms(1000)
+        show_snooze_duration_confirmation = False
+        
+    elif show_mute_confirmation:
+        show_message(f"{'Radio Muted' if fm_radio.Mute else 'Radio Unmuted'}")  # Show confirmation message
+        utime.sleep_ms(1000)
+        show_mute_confirmation = False
+        
     else:
         current_time = clock.get_time()
 
@@ -344,12 +398,10 @@ def update_display(t):
         oled.rect(128 - temp_width - 1, 0, temp_width, 10, 1)  # Draw rectangle
         oled.text(temp_text, 128 - temp_width + 2, 1)  # Adjust text position for padding
         
-        # Display radio frequency at the bottom
-        radio_frequency = f"FM {frequency}.{decimal} MHz"
-        text_width = 8 * len(radio_frequency)  # Calculate coordinates to center the text
-        x = (SCREEN_WIDTH - text_width) // 2
-        y = SCREEN_HEIGHT - 8  # Position the text at the bottom row
-        oled.text(radio_frequency, x, y)
+        # Display radio frequency, volume, and channel name at the bottom
+        frequency_key = frequency + decimal * 0.1
+        radio_frequency = f"FM {frequency_key:.1f} MHz | Vol: {fm_radio.Volume} | {stations.get(frequency_key, 'Unknown Station')}"
+        scroll_position = scroll_text(radio_frequency, scroll_position, SCREEN_HEIGHT - 8, SCREEN_WIDTH)
 
     oled.show()
 
@@ -364,9 +416,10 @@ clock_set = False
 alarm_set = False
 editing_time = False
 editing_alarm = False
-
-
-
+show_alarm_confirmation = False
+show_snooze_duration_confirmation = False
+show_mute_confirmation = False
+show_channel_set_confirmation = False
 
 # Global variable to store the temperature
 current_temp = temp_sensor.read_temp()
@@ -378,7 +431,7 @@ def update_temperature(t):
 # Initialize the timer
 display_timer = Timer()
 temp_timer = Timer()
-display_timer.init(period=500, mode=Timer.PERIODIC, callback=update_display)  # Update every 500ms
+display_timer.init(period=20, mode=Timer.PERIODIC, callback=update_display)  # Update every 500ms
 temp_timer.init(period=30000, mode=Timer.PERIODIC, callback=update_temperature)  # Update every 30sec
 
 # Set up interrupt for the buttons
@@ -398,6 +451,7 @@ try:
 except KeyboardInterrupt:
     cleanup()
     print("Program interrupted and cleaned up")
+
 
 
 
