@@ -36,7 +36,7 @@ oled = SSD1306_SPI(SCREEN_WIDTH, SCREEN_HEIGHT, oled_spi, spi_dc, spi_res, spi_c
 # Clock instance
 clock = Clock()
 temp_sensor = Temperature()
-alarm = Alarm(buzzer_pin=15, snooze_pin=3)
+alarm = Alarm(buzzer_pin=15, snooze_pin=3, radio=fm_radio)
 
 # Button setup
 button1 = Pin(0, Pin.IN, Pin.PULL_DOWN)  # Time and Alarm Set
@@ -50,7 +50,9 @@ last_press1 = 0
 count_press2 = 0
 detected_press2 = False
 setting_channel = False
+editing_snooze = False
 setting_integer_part = True
+snooze_duration = 10  # Default snooze duration
 
 def button_pressed3(pin):
     global last_press3
@@ -79,77 +81,98 @@ def button_pressed1(pin):
         setting_integer_part = True  # Reset to start by setting the integer part
         last_press1 = new_time1
         update_display(None)  # Update display immediately after entering channel setting mode
-
+        
 def edit_time_or_alarm():
-    global detected_press2, count_press2, clock_set, alarm_set, editing_time, editing_alarm
+    global detected_press2, count_press2, clock_set, alarm_set, editing_time, editing_alarm, editing_snooze, snooze_duration
     if detected_press2:
-        utime.sleep_ms(800)
-        if count_press2 > 1:
+        utime.sleep_ms(1200)  # Allow time to detect multiple presses
+
+        if count_press2 > 2:  # Three presses to edit snooze duration
+            print("Editing Snooze Duration")
+            editing_snooze = True
+            editing_alarm = False
+            editing_time = False
+        elif count_press2 > 1:  # Two presses to edit the alarm
             print("Editing Alarm")
             alarm_set = False
             editing_alarm = True
-        else:
+            editing_snooze = False
+            editing_time = False
+        else:  # One press to edit the time
             print("Editing Time")
             clock_set = False
             editing_time = True
+            editing_alarm = False
+            editing_snooze = False
 
-        while not clock_set or not alarm_set:
+        # While loop to handle all editing modes
+        while not clock_set or not alarm_set or editing_snooze:
             update_display(None)
-            handle_encoder()
+            handle_encoder()  # This will now handle all three scenarios: time, alarm, and snooze duration.
             if SW.value() == 0:
                 handle_button(SW, 800)
-        
+
         # Reset state variables
         editing_time = False
         editing_alarm = False
+        editing_snooze = False
         detected_press2 = False
         count_press2 = 0
         return True
     else:
         return False
 
+
 def handle_encoder():
-    global previousValue, hour, minute, setting_minutes, clock, setting_channel, frequency, decimal, setting_integer_part
-    
+    global previousValue, hour, minute, setting_minutes, clock, setting_channel, frequency, decimal, setting_integer_part, alarm, editing_snooze, snooze_duration
+
     current_value = CLK_Pin.value()
     if current_value != previousValue:
         if CLK_Pin.value() == 0:
-            if setting_channel:
-                if setting_integer_part:
-                    if DT_Pin.value() == 0:
+            if DT_Pin.value() == 0:
+                if editing_snooze:
+                    snooze_duration = (snooze_duration - 1) % 301
+                    if snooze_duration == 0:
+                        snooze_duration = 300
+                elif setting_channel:
+                    if setting_integer_part:
                         frequency = (frequency - 1) if frequency > 88 else 108
                     else:
-                        frequency = (frequency + 1) if frequency < 108 else 88
-                else:
-                    if DT_Pin.value() == 0:
                         decimal = (decimal - 1) % 10
+                elif setting_minutes:
+                    minute = (minute - 1) % 60
+                else:
+                    hour = (hour - 1) % (24 if clock.time_format_24hr else 12)
+                    if not clock.time_format_24hr and hour == 0:
+                        hour = 12
+            else:
+                if editing_snooze:
+                    snooze_duration = (snooze_duration + 1) % 301
+                    if snooze_duration == 301:
+                        snooze_duration = 1
+                elif setting_channel:
+                    if setting_integer_part:
+                        frequency = (frequency + 1) if frequency > 88 else 108
                     else:
                         decimal = (decimal + 1) % 10
-            else:
-                if DT_Pin.value() == 0:
-                    if setting_minutes:
-                        minute = (minute - 1) % 60
-                    else:
-                        hour = (hour - 1) % (24 if clock.time_format_24hr else 12)
-                        if not clock.time_format_24hr and hour == 0:
-                            hour = 12
+                elif setting_minutes:
+                    minute = (minute + 1) % 60
                 else:
-                    if setting_minutes:
-                        minute = (minute + 1) % 60
-                    else:
-                        hour = (hour + 1) % (24 if clock.time_format_24hr else 12)
-                        if not clock.time_format_24hr and hour == 0:
-                            hour = 12
+                    hour = (hour + 1) % (24 if clock.time_format_24hr else 12)
+                    if not clock.time_format_24hr and hour == 0:
+                        hour = 12
             previousValue = 1
             update_display(None)  # Update display immediately after changing value
             utime.sleep_ms(100)
 
 def handle_button(pin, delay):
-    global last_button_press_time, setting_minutes, clock_set, alarm_set, editing_time, editing_alarm, setting_channel, setting_integer_part
+    global last_button_press_time, setting_minutes, clock_set, alarm_set, editing_time, editing_alarm, editing_snooze, setting_channel, setting_integer_part, snooze_duration
     current_time = utime.ticks_ms()
     if current_time - last_button_press_time > delay:  # Debounce the button
         last_button_press_time = current_time
+        print("Button Press Detected")
         if setting_channel:
+            print("Setting Channel...")
             if setting_integer_part:
                 setting_integer_part = False  # Switch to setting the decimal part
             else:
@@ -157,30 +180,86 @@ def handle_button(pin, delay):
                 fm_radio.ProgramRadio()
                 setting_channel = False  # Exit channel setting mode
                 setting_integer_part = True  # Reset for future channel settings
+                show_message("Channel Set")  # Show confirmation message
+                utime.sleep(2)
+                clear_display()
         elif not clock_set:
+            print("Setting Clock...")
             if setting_minutes:
                 clock.set_time(hour, minute)
                 clock_set = True
             setting_minutes = not setting_minutes
         elif not alarm_set:
+            print("Setting Alarm...")
             if setting_minutes:
                 alarm.set_alarm(hour, minute)
                 alarm_set = True
+                show_message("Alarm Set")  # Show confirmation message
+                utime.sleep(2)
+                clear_display()
             setting_minutes = not setting_minutes
+        elif editing_snooze:
+            print("Setting Snooze Duration...")
+            alarm.set_snooze_duration(snooze_duration)  # Set the snooze duration in the alarm class
+            editing_snooze = False  # Exit snooze duration editing mode
+            show_message("Snooze Duration Set")  # Show confirmation message
+            utime.sleep(2)
+            clear_display()
         else:
             # Toggle mute
+            print("Toggling Mute...")
             new_mute_state = not fm_radio.Mute
             if fm_radio.SetMute(int(new_mute_state)):
                 fm_radio.ProgramRadio()
+                show_message(f"{'Radio Muted' if new_mute_state else 'Radio Unmuted'}")  # Show confirmation message
+                utime.sleep(2)
+                clear_display()
                 print("Mute Toggled to:", new_mute_state)
         update_display(None)  # Update display immediately after handling button
-
+        
 def cleanup():
     fm_radio.SetMute(True)
     fm_radio.ProgramRadio()
     alarm.be_quiet()
     print("Radio muted for cleanup")
 
+def show_message(message):
+    oled.fill(0)  # Clear the display
+    max_chars_per_line = SCREEN_WIDTH // 8  # Max characters per line based on font width (8 pixels per character)
+    words = message.split(' ')
+    current_line = ""
+    lines = []
+    
+    for word in words:
+        # Check if adding the next word exceeds the maximum characters per line
+        if len(current_line + word) <= max_chars_per_line:
+            current_line += word + " "
+        else:
+            lines.append(current_line.strip())
+            current_line = word + " "  # Start a new line
+
+    # Add any remaining text in current_line as the last line
+    if current_line:
+        lines.append(current_line.strip())
+    
+    # Calculate the starting vertical position to center the text vertically
+    total_text_height = 10 * len(lines)  # 10 pixels per line (8 for text + 2 for spacing)
+    y = (SCREEN_HEIGHT - total_text_height) // 2
+
+    # Display each line centered on the screen
+    for line in lines:
+        text_width = len(line) * 8
+        x = (SCREEN_WIDTH - text_width) // 2  # Center the text horizontally
+        oled.text(line, x, y)
+        y += 10  # Move to the next line
+
+    oled.show()
+    
+def clear_display():
+    utime.sleep_ms(100)  # Show the message for 2 seconds
+    oled.fill(0)  # Clear the display again after showing the message
+    update_display(None)  # Redraw the normal display content
+    
 # Function to be called by the timer
 def update_display(t):
     oled.fill(0)  # Clear the display
@@ -211,6 +290,31 @@ def update_display(t):
         x = (SCREEN_WIDTH - text_width) // 2
         y = (SCREEN_HEIGHT - 8) // 2
         oled.text(display_time, x, y)
+    elif editing_alarm:
+        display_time = f"{hour:02}:{minute:02}"
+        # Flash the digits while setting the alarm
+        if int(utime.time() * (2/3)) % 2:
+            if setting_minutes:
+                display_time = f"{hour:02}:  "
+            else:
+                display_time = f"  :{minute:02}"
+        oled.text("Set Alarm:", 0, 0)
+        text_width = 8 * len(display_time)  # Calculate coordinates to center the text
+        x = (SCREEN_WIDTH - text_width) // 2
+        y = (SCREEN_HEIGHT - 8) // 2
+        oled.text(display_time, x, y)
+
+    elif editing_snooze:
+        display_time = f"Snooze: {snooze_duration} sec"
+        # Flash the snooze duration setting
+        if int(utime.time() * (2/3)) % 2:
+            display_time = "Snooze:    sec"
+        oled.text("Edit Snooze Duration", 0, 0)
+        text_width = 8 * len(display_time)  # Calculate coordinates to center the text
+        x = (SCREEN_WIDTH - text_width) // 2
+        y = (SCREEN_HEIGHT - 8) // 2
+        oled.text(display_time, x, y)
+        
     elif setting_channel:
         display_channel = f"{frequency}.{decimal}"
         # Flash the digits while setting the channel
@@ -224,22 +328,31 @@ def update_display(t):
         x = (SCREEN_WIDTH - text_width) // 2
         y = (SCREEN_HEIGHT - 8) // 2
         oled.text(display_channel, x, y)
+
     else:
         current_time = clock.get_time()
-        
+
         # Display time
         text_width = 8 * len(current_time)  # Calculate coordinates to center the text
         x = (SCREEN_WIDTH - text_width) // 2
         y = (SCREEN_HEIGHT - 8) // 2
         oled.text(current_time, x, y)
-        
+
         # Display temperature in the top right corner, enclosed in a rectangle
         temp_text = f"{current_temp}C"
         temp_width = 8 * len(temp_text) + 4  # Plus some padding
         oled.rect(128 - temp_width - 1, 0, temp_width, 10, 1)  # Draw rectangle
         oled.text(temp_text, 128 - temp_width + 2, 1)  # Adjust text position for padding
-    
+        
+        # Display radio frequency at the bottom
+        radio_frequency = f"FM {frequency}.{decimal} MHz"
+        text_width = 8 * len(radio_frequency)  # Calculate coordinates to center the text
+        x = (SCREEN_WIDTH - text_width) // 2
+        y = SCREEN_HEIGHT - 8  # Position the text at the bottom row
+        oled.text(radio_frequency, x, y)
+
     oled.show()
+
 
 # Global variables for setting time, alarm, and channel
 hour = 0
@@ -251,6 +364,9 @@ clock_set = False
 alarm_set = False
 editing_time = False
 editing_alarm = False
+
+
+
 
 # Global variable to store the temperature
 current_temp = temp_sensor.read_temp()
@@ -282,3 +398,6 @@ try:
 except KeyboardInterrupt:
     cleanup()
     print("Program interrupted and cleaned up")
+
+
+
