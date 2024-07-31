@@ -42,11 +42,15 @@ alarm = Alarm(buzzer_pin=15, snooze_pin=3)
 button1 = Pin(0, Pin.IN, Pin.PULL_DOWN)  # Time and Alarm Set
 button2 = Pin(1, Pin.IN, Pin.PULL_DOWN)  # Time/Alarm Edit
 button3 = Pin(2, Pin.IN, Pin.PULL_DOWN)  # 12/24 hr toggle
+button4 = Pin(3, Pin.IN, Pin.PULL_DOWN)  # Snooze
 
 last_press3 = 0
 last_press2 = 0
+last_press1 = 0
 count_press2 = 0
 detected_press2 = False
+setting_channel = False
+setting_integer_part = True
 
 def button_pressed3(pin):
     global last_press3
@@ -65,6 +69,16 @@ def button_pressed2(pin):
         count_press2 += 1
         detected_press2 = True
         print(count_press2)
+
+def button_pressed1(pin):
+    global last_press1, setting_channel, setting_integer_part
+    new_time1 = utime.ticks_ms()
+    if (new_time1 - last_press1) > 50:
+        print("Setting channel")
+        setting_channel = True
+        setting_integer_part = True  # Reset to start by setting the integer part
+        last_press1 = new_time1
+        update_display(None)  # Update display immediately after entering channel setting mode
 
 def edit_time_or_alarm():
     global detected_press2, count_press2, clock_set, alarm_set, editing_time, editing_alarm
@@ -95,52 +109,71 @@ def edit_time_or_alarm():
         return False
 
 def handle_encoder():
-    global previousValue, hour, minute, setting_minutes, clock
+    global previousValue, hour, minute, setting_minutes, clock, setting_channel, frequency, decimal, setting_integer_part
     
     current_value = CLK_Pin.value()
     if current_value != previousValue:
         if CLK_Pin.value() == 0:
-            if DT_Pin.value() == 0:
-                if setting_minutes:
-                    minute = (minute - 1) % 60
+            if setting_channel:
+                if setting_integer_part:
+                    if DT_Pin.value() == 0:
+                        frequency = (frequency - 1) if frequency > 88 else 108
+                    else:
+                        frequency = (frequency + 1) if frequency < 108 else 88
                 else:
-                    hour = (hour - 1) % (24 if clock.time_format_24hr else 12)
-                    if not clock.time_format_24hr and hour == 0:
-                        hour = 12
+                    if DT_Pin.value() == 0:
+                        decimal = (decimal - 1) % 10
+                    else:
+                        decimal = (decimal + 1) % 10
             else:
-                if setting_minutes:
-                    minute = (minute + 1) % 60
+                if DT_Pin.value() == 0:
+                    if setting_minutes:
+                        minute = (minute - 1) % 60
+                    else:
+                        hour = (hour - 1) % (24 if clock.time_format_24hr else 12)
+                        if not clock.time_format_24hr and hour == 0:
+                            hour = 12
                 else:
-                    hour = (hour + 1) % (24 if clock.time_format_24hr else 12)
-                    if not clock.time_format_24hr and hour == 0:
-                        hour = 12
+                    if setting_minutes:
+                        minute = (minute + 1) % 60
+                    else:
+                        hour = (hour + 1) % (24 if clock.time_format_24hr else 12)
+                        if not clock.time_format_24hr and hour == 0:
+                            hour = 12
             previousValue = 1
             update_display(None)  # Update display immediately after changing value
             utime.sleep_ms(100)
 
 def handle_button(pin, delay):
-    global last_button_press_time, setting_minutes, clock_set, alarm_set, editing_time, editing_alarm
+    global last_button_press_time, setting_minutes, clock_set, alarm_set, editing_time, editing_alarm, setting_channel, setting_integer_part
     current_time = utime.ticks_ms()
     if current_time - last_button_press_time > delay:  # Debounce the button
         last_button_press_time = current_time
-        if not clock_set:
+        if setting_channel:
+            if setting_integer_part:
+                setting_integer_part = False  # Switch to setting the decimal part
+            else:
+                fm_radio.SetFrequency(frequency + decimal * 0.1)
+                fm_radio.ProgramRadio()
+                setting_channel = False  # Exit channel setting mode
+                setting_integer_part = True  # Reset for future channel settings
+        elif not clock_set:
             if setting_minutes:
                 clock.set_time(hour, minute)
                 clock_set = True
             setting_minutes = not setting_minutes
-            update_display(None)  # Update display immediately after handling button
         elif not alarm_set:
             if setting_minutes:
                 alarm.set_alarm(hour, minute)
                 alarm_set = True
             setting_minutes = not setting_minutes
-            update_display(None)  # Update display immediately after handling button
         else:
             # Toggle mute
             new_mute_state = not fm_radio.Mute
             if fm_radio.SetMute(int(new_mute_state)):
                 fm_radio.ProgramRadio()
                 print("Mute Toggled to:", new_mute_state)
+        update_display(None)  # Update display immediately after handling button
 
 def cleanup():
     fm_radio.SetMute(True)
@@ -178,6 +211,19 @@ def update_display(t):
         x = (SCREEN_WIDTH - text_width) // 2
         y = (SCREEN_HEIGHT - 8) // 2
         oled.text(display_time, x, y)
+    elif setting_channel:
+        display_channel = f"{frequency}.{decimal}"
+        # Flash the digits while setting the channel
+        if int(utime.time() * (2/3)) % 2:
+            if setting_integer_part:
+                display_channel = f"{frequency}. "
+            else:
+                display_channel = f"   .{decimal}"
+        oled.text("Set Channel:", 0, 0)
+        text_width = 8 * len(display_channel)  # Calculate coordinates to center the text
+        x = (SCREEN_WIDTH - text_width) // 2
+        y = (SCREEN_HEIGHT - 8) // 2
+        oled.text(display_channel, x, y)
     else:
         current_time = clock.get_time()
         
@@ -195,9 +241,11 @@ def update_display(t):
     
     oled.show()
 
-# Global variables for setting time
+# Global variables for setting time, alarm, and channel
 hour = 0
 minute = 0
+frequency = 101
+decimal = 9
 setting_minutes = False
 clock_set = False
 alarm_set = False
@@ -218,8 +266,10 @@ display_timer.init(period=500, mode=Timer.PERIODIC, callback=update_display)  # 
 temp_timer.init(period=30000, mode=Timer.PERIODIC, callback=update_temperature)  # Update every 30sec
 
 # Set up interrupt for the buttons
+button1.irq(trigger=Pin.IRQ_FALLING, handler=button_pressed1)
 button2.irq(trigger=Pin.IRQ_FALLING, handler=button_pressed2)
 button3.irq(trigger=Pin.IRQ_FALLING, handler=button_pressed3)
+button4.irq(trigger=Pin.IRQ_FALLING, handler=alarm.snooze_or_stop)
 
 try:
     while True:
