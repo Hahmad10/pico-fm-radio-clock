@@ -56,7 +56,6 @@ def button_pressed3(pin):
         clock.toggle_time_format()
         last_press3 = new_time3
         update_display(None)  # Update display immediately after toggling time format
-        
 
 def button_pressed2(pin):
     global detected_press2, count_press2, last_press2, clock_set, alarm_set
@@ -66,29 +65,34 @@ def button_pressed2(pin):
         count_press2 += 1
         detected_press2 = True
         print(count_press2)
-            
+
 def edit_time_or_alarm():
-    global detected_press2, count_press2, clock_set, alarm_set
+    global detected_press2, count_press2, clock_set, alarm_set, editing_time, editing_alarm
     if detected_press2:
         utime.sleep_ms(800)
         if count_press2 > 1:
             print("Editing Alarm")
             alarm_set = False
+            editing_alarm = True
         else:
             print("Editing Time")
             clock_set = False
-        
+            editing_time = True
+
         while not clock_set or not alarm_set:
             update_display(None)
             handle_encoder()
             if SW.value() == 0:
                 handle_button(SW, 800)
+        
+        # Reset state variables
+        editing_time = False
+        editing_alarm = False
         detected_press2 = False
         count_press2 = 0
         return True
     else:
         return False
-    
 
 def handle_encoder():
     global previousValue, hour, minute, setting_minutes, clock
@@ -143,7 +147,7 @@ def cleanup():
     fm_radio.ProgramRadio()
     alarm.be_quiet()
     print("Radio muted for cleanup")
-    
+
 # Function to be called by the timer
 def update_display(t):
     oled.fill(0)  # Clear the display
@@ -214,7 +218,6 @@ display_timer.init(period=500, mode=Timer.PERIODIC, callback=update_display)  # 
 temp_timer.init(period=30000, mode=Timer.PERIODIC, callback=update_temperature)  # Update every 30sec
 
 # Set up interrupt for the buttons
-#button1.irq(trigger=Pin.IRQ_FALLING, handler=handle_button)
 button2.irq(trigger=Pin.IRQ_FALLING, handler=button_pressed2)
 button3.irq(trigger=Pin.IRQ_FALLING, handler=button_pressed3)
 
