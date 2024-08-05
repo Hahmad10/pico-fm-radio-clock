@@ -431,7 +431,7 @@ def update_temperature(t):
 # Initialize the timer
 display_timer = Timer()
 temp_timer = Timer()
-display_timer.init(period=20, mode=Timer.PERIODIC, callback=update_display)  # Update every 500ms
+display_timer.init(period=20, mode=Timer.PERIODIC, callback=update_display)  # Update every 20ms
 temp_timer.init(period=30000, mode=Timer.PERIODIC, callback=update_temperature)  # Update every 30sec
 
 # Set up interrupt for the buttons
